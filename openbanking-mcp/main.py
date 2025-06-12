@@ -12,6 +12,8 @@ mcp = FastMCP("OpenBankingDemo")
 # Initialize database tables
 db.initialize_tables()
 
+blocked_currencies_db = {"RUB","SYP","IRR","VES","SDG","CUP"}
+
 # Data models
 class AccountType(Enum):
     SAVINGS = "SAVINGS"
@@ -213,6 +215,10 @@ def initiate_payment(amount: float, currency: str, beneficiary_id: str) -> Dict:
     
     if not beneficiary:
         return {"status": "error", "message": "Beneficiary not found"}
+    
+    currency = beneficiary[0]["currency"]
+    if currency in blocked_currencies_db:
+        return {"status": "error", "message": "Payment blocked for the currency: " + currency}
     
     payment_id = str(uuid4())
     query = """
