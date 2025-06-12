@@ -1,0 +1,253 @@
+openapi: 3.0.3
+info:
+  title: Banking Tools API
+  version: "1.0.0"
+  description: |
+    API for banking operations that can be used by a Bedrock Agent.
+    This API provides tools for managing bank accounts and processing payments.
+
+servers:
+  - url: https://cteybj63ywtlxehc7xghotyqqa0eckka.lambda-url.us-west-2.on.aws
+    description: Lambda Function URL endpoint
+
+paths:
+  /list_accounts:
+    post:
+      summary: List all accounts
+      description: Retrieve a list of all bank accounts
+      operationId: listAccounts
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messageVersion:
+                    type: string
+                    example: "1.0"
+                  response:
+                    type: object
+                    properties:
+                      actionGroup:
+                        type: string
+                        example: "toollist"
+                      apiPath:
+                        type: string
+                        example: "/list_accounts"
+                      httpMethod:
+                        type: string
+                        example: "POST"
+                      httpStatusCode:
+                        type: integer
+                        example: 200
+                      responseBody:
+                        type: object
+                        properties:
+                          application/json:
+                            type: object
+                            properties:
+                              body:
+                                type: string
+                                description: JSON string containing the response data
+                                example: '{"accounts":[{"id":"acc_001","name":"Primary Checking","type":"checking","balance":2500.5,"currency":"USD"},{"id":"acc_002","name":"Savings Account","type":"savings","balance":10000.0,"currency":"USD"}],"message":"Successfully retrieved accounts"}'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messageVersion:
+                    type: string
+                    example: "1.0"
+                  response:
+                    type: object
+                    properties:
+                      actionGroup:
+                        type: string
+                        example: "toollist"
+                      apiPath:
+                        type: string
+                        example: "/list_accounts"
+                      httpMethod:
+                        type: string
+                        example: "POST"
+                      httpStatusCode:
+                        type: integer
+                        example: 500
+                      responseBody:
+                        type: object
+                        properties:
+                          application/json:
+                            type: object
+                            properties:
+                              body:
+                                type: string
+                                description: JSON string containing the error information
+                                example: '{"error":"Internal server error","message":"Failed to retrieve accounts"}'
+
+  /create_account:
+    post:
+      summary: Create a new bank account
+      description: Creates a new bank account with specified details
+      operationId: create_account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - type
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: Account name
+                type:
+                  type: string
+                  enum: [checking, savings, credit]
+                  description: Type of account to create
+                initial_balance:
+                  type: number
+                  format: float
+                  minimum: 0
+                  default: 0.0
+                  description: Initial account balance
+                currency:
+                  type: string
+                  pattern: "^[A-Z]{3}$"
+                  default: "USD"
+                  description: Account currency code
+      responses:
+        '200':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  toolUseId:
+                    type: string
+                    description: Unique identifier for the tool invocation
+                  status:
+                    type: string
+                    enum: [success, error]
+                  content:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [text]
+                          description: Type of content
+                        text:
+                          type: object
+                          description: Actual response data as a JSON object
+              example:
+                toolUseId: "tool_123"
+                status: "success"
+                content:
+                  - type: "text"
+                    text: '{"status":"success","data":{"id":"acc_003","name":"My Checking Account","type":"checking","balance":1000.00,"currency":"USD"}}'
+
+  /initiate_payment:
+    post:
+      summary: Initiate a payment between accounts
+      description: Initiates a payment between two accounts with validation
+      operationId: initiate_payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - from_account
+                - to_account
+                - amount
+              properties:
+                from_account:
+                  type: string
+                  description: Source account ID
+                to_account:
+                  type: string
+                  description: Destination account ID
+                amount:
+                  type: number
+                  format: float
+                  exclusiveMinimum: 0
+                  description: Payment amount
+                description:
+                  type: string
+                  maxLength: 200
+                  description: Payment description
+                  nullable: true
+      responses:
+        '200':
+          description: Payment initiated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  toolUseId:
+                    type: string
+                    description: Unique identifier for the tool invocation
+                  status:
+                    type: string
+                    enum: [success, error]
+                  content:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [text]
+                          description: Type of content
+                        text:
+                          type: object
+                          description: Actual response data as a JSON object
+              example:
+                toolUseId: "tool_123"
+                status: "success"
+                content:
+                  - type: "text"
+                    text: '{"status":"success","data":{"payment_id":"pay_001","status":"completed","from_account":"acc_001","to_account":"acc_002","amount":100.00,"description":"Monthly rent payment"}}'
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        toolUseId:
+          type: string
+          description: Unique identifier for the tool invocation
+        status:
+          type: string
+          enum: [error]
+          description: Error status
+        content:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [text]
+                description: Type of content
+              text:
+                type: object
+                description: Error message
+      example:
+        toolUseId: "tool_123"
+        status: "error"
+        content:
+          - type: "text"
+            text: "Invalid account ID provided" 
