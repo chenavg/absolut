@@ -17,19 +17,27 @@ class AccountType(Enum):
     LOAN = "LOAN"
 
 class Account:
-    def __init__(self, account_id: str, account_type: str, balance: float, currency: str):
+    def __init__(self, account_id: str, account_name: str, account_type: str, interest_rate: float, bank_code: str, balance: float, currency: str, country: str):
         self.account_id = account_id
+        self.account_name = account_name
         self.account_type = account_type
+        self.interest_rate = interest_rate
+        self.bank_code = bank_code
         self.balance = balance
         self.currency = currency
+        self.country = country
         self.created_at = datetime.now().isoformat()
 
 class Beneficiary:
-    def __init__(self, beneficiary_id: str, name: str, account_number: str, bank_code: str):
+    def __init__(self, beneficiary_id: str, cust_account_id: str, name: str, ben_account_id: str, bank_code: str, currency: str, country: str):
         self.beneficiary_id = beneficiary_id
+        self.ben_account_id = ben_account_id
+        self.cust_account_id = cust_account_id
         self.name = name
-        self.account_number = account_number
         self.bank_code = bank_code
+        self.currency = currency
+        self.country = country
+        
 
 class Payment:
     def __init__(self, payment_id: str, amount: float, currency: str, beneficiary_id: str, 
@@ -45,6 +53,7 @@ class Payment:
 accounts_db: Dict[str, Account] = {}
 beneficiaries_db: Dict[str, Dict] = {}
 payments_db: Dict[str, Payment] = {}
+blocked_currencies_db = {"RUB","SYP","IRR","VES","SDG","CUP"}
 
 # Account Management
 @mcp.tool()
@@ -73,6 +82,10 @@ def list_accounts(
     accounts = [
         {
             "account_id": acc.account_id,
+            "account_name": acc.account_name,
+            "interest_rate": acc.interest_rate,
+            "bank_code": acc.bank_code,
+            "country": acc.country,
             "account_type": acc.account_type,
             "balance": acc.balance,
             "currency": acc.currency,
@@ -136,7 +149,7 @@ def get_account_summary() -> Dict:
     }
 
 @mcp.tool()
-def add_account(account_type: str, balance: float, currency: str) -> Dict:
+def add_account(account_type: str, balance: float, currency: str, interest_rate: float, bank_code: str, country: str, account_name: str) -> Dict:
     """Add a single bank account
     
     Args:
@@ -148,11 +161,15 @@ def add_account(account_type: str, balance: float, currency: str) -> Dict:
         Dictionary containing the created account details
     """
     account_id = str(uuid4())
-    account = Account(account_id, account_type, balance, currency)
+    account = Account(account_id, account_name, account_type, interest_rate, bank_code, balance, currency, country)
     accounts_db[account_id] = account
     return {
         "account_id": account_id,
         "account_type": account_type,
+        "interest_rate": interest_rate,
+        "bank_code": bank_code,
+        "country": country,
+        "account_name": account_name,
         "balance": balance,
         "currency": currency,
         "created_at": account.created_at
@@ -177,14 +194,22 @@ def add_multiple_accounts(accounts: List[Dict]) -> List[Dict]:
         account_id = str(uuid4())
         account = Account(
             account_id,
+            account_data["account_name"],
             account_data["account_type"],
+            account_data["interest_rate"],
+            account_data["bank_code"],
             account_data["balance"],
-            account_data["currency"]
+            account_data["currency"],
+            account_data["country"]
         )
         accounts_db[account_id] = account
         created_accounts.append({
             "account_id": account_id,
             "account_type": account.account_type,
+            "interest_rate": account.interest_rate,
+            "bank_code": account.bank_code,
+            "country": account.country,
+            "account_name": account.account_name,
             "balance": account.balance,
             "currency": account.currency,
             "created_at": account.created_at
@@ -205,7 +230,11 @@ def get_account_details(account_id: str) -> Dict:
         return {"error": "Account not found"}
     return {
         "account_id": account.account_id,
+        "account_name": account.account_name,
         "account_type": account.account_type,
+        "interest_rate": account.interest_rate,
+        "bank_code": account.bank_code,
+        "country": account.country,
         "balance": account.balance,
         "currency": account.currency,
         "created_at": account.created_at
@@ -213,14 +242,17 @@ def get_account_details(account_id: str) -> Dict:
 
 # Beneficiary Management
 @mcp.tool()
-def add_beneficiary(name: str, account_number: str, bank_code: str) -> Dict:
+def add_beneficiary(name: str, cust_account_id: str, ben_account_id: str, bank_code: str, currency: str, country: str) -> Dict:
     """Add a new beneficiary"""
     beneficiary_id = str(uuid4())
     beneficiaries_db[beneficiary_id] = {
         "beneficiary_id": beneficiary_id,
         "name": name,
-        "account_number": account_number,
-        "bank_code": bank_code
+        "cust_account_id": cust_account_id,
+        "ben_account_id": ben_account_id,
+        "bank_code": bank_code,
+        "currency": currency,
+        "country": country
     }
     return beneficiaries_db[beneficiary_id]
 
@@ -266,6 +298,10 @@ def initiate_payment(amount: float, currency: str, beneficiary_id: str) -> Dict:
     """Initiate an immediate payment"""
     if beneficiary_id not in beneficiaries_db:
         return {"status": "error", "message": "Beneficiary not found"}
+    
+    currency = beneficiaries_db.get(beneficiary_id)["currency"]
+    if currency in blocked_currencies_db:
+        return {"status": "error", "message": "Payment blocked for the currency: " + currency}
     
     payment_id = str(uuid4())
     payment = {
@@ -490,7 +526,13 @@ def get_account_balance(account_id: str) -> Dict:
         return {"error": "Account not found"}
     return {
         "account_id": account.account_id,
+        "account_name": account.account_name,
+        "interest_rate": account.interest_rate,
+        "bank_code": account.bank_code,
+        "country": account.country,
         "balance": account.balance,
         "currency": account.currency,
         "last_updated": datetime.now().isoformat()
     }
+
+    
