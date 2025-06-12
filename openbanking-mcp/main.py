@@ -4,9 +4,13 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from uuid import uuid4
 from enum import Enum
+from db_config import get_db_connection, init_db
 
 # Create an MCP server
 mcp = FastMCP("OpenBankingDemo")
+
+# Initialize database
+init_db()
 
 # Data models
 class AccountType(Enum):
@@ -41,8 +45,7 @@ class Payment:
         self.status = status
         self.scheduled_date = scheduled_date
 
-# Mock database
-accounts_db: Dict[str, Account] = {}
+# Mock database for other entities (to be migrated later)
 beneficiaries_db: Dict[str, Dict] = {}
 payments_db: Dict[str, Payment] = {}
 
@@ -69,41 +72,52 @@ def list_accounts(
     Returns:
         List of accounts matching the criteria
     """
-    # Convert accounts to list of dictionaries
-    accounts = [
-        {
-            "account_id": acc.account_id,
-            "account_type": acc.account_type,
-            "balance": acc.balance,
-            "currency": acc.currency,
-            "created_at": acc.created_at
-        }
-        for acc in accounts_db.values()
-    ]
+    connection = get_db_connection()
+    if not connection:
+        return []
     
-    # Apply filters
-    if account_type:
-        accounts = [acc for acc in accounts if acc["account_type"] == account_type]
-    
-    if currency:
-        accounts = [acc for acc in accounts if acc["currency"] == currency]
-    
-    if min_balance is not None:
-        accounts = [acc for acc in accounts if acc["balance"] >= min_balance]
-    
-    if max_balance is not None:
-        accounts = [acc for acc in accounts if acc["balance"] <= max_balance]
-    
-    # Apply sorting
-    reverse = sort_order.lower() == "desc"
-    if sort_by == "balance":
-        accounts.sort(key=lambda x: x["balance"], reverse=reverse)
-    elif sort_by == "created_at":
-        accounts.sort(key=lambda x: x["created_at"], reverse=reverse)
-    elif sort_by == "account_type":
-        accounts.sort(key=lambda x: x["account_type"], reverse=reverse)
-    
-    return accounts
+    try:
+        cursor = connection.cursor(dictionary=True)
+        
+        # Build the query
+        query = "SELECT * FROM accounts WHERE 1=1"
+        params = []
+        
+        if account_type:
+            query += " AND account_type = %s"
+            params.append(account_type)
+        
+        if currency:
+            query += " AND currency = %s"
+            params.append(currency)
+        
+        if min_balance is not None:
+            query += " AND balance >= %s"
+            params.append(min_balance)
+        
+        if max_balance is not None:
+            query += " AND balance <= %s"
+            params.append(max_balance)
+        
+        # Add sorting
+        if sort_by in ["balance", "created_at", "account_type"]:
+            query += f" ORDER BY {sort_by} {'DESC' if sort_order.lower() == 'desc' else 'ASC'}"
+        
+        cursor.execute(query, params)
+        accounts = cursor.fetchall()
+        
+        # Convert datetime objects to ISO format strings
+        for account in accounts:
+            account['created_at'] = account['created_at'].isoformat()
+        
+        return accounts
+    except Error as e:
+        print(f"Error listing accounts: {e}")
+        return []
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 @mcp.tool()
 def get_account_summary() -> Dict:
@@ -112,28 +126,46 @@ def get_account_summary() -> Dict:
     Returns:
         Dictionary containing account summary statistics
     """
-    accounts = list(accounts_db.values())
+    connection = get_db_connection()
+    if not connection:
+        return {"error": "Database connection failed"}
     
-    # Calculate total balance by currency
-    balance_by_currency = {}
-    for acc in accounts:
-        if acc.currency not in balance_by_currency:
-            balance_by_currency[acc.currency] = 0
-        balance_by_currency[acc.currency] += acc.balance
-    
-    # Count accounts by type
-    accounts_by_type = {}
-    for acc in accounts:
-        if acc.account_type not in accounts_by_type:
-            accounts_by_type[acc.account_type] = 0
-        accounts_by_type[acc.account_type] += 1
-    
-    return {
-        "total_accounts": len(accounts),
-        "balance_by_currency": balance_by_currency,
-        "accounts_by_type": accounts_by_type,
-        "last_updated": datetime.now().isoformat()
-    }
+    try:
+        cursor = connection.cursor(dictionary=True)
+        
+        # Get total accounts
+        cursor.execute("SELECT COUNT(*) as total FROM accounts")
+        total_accounts = cursor.fetchone()['total']
+        
+        # Get balance by currency
+        cursor.execute("""
+            SELECT currency, SUM(balance) as total_balance 
+            FROM accounts 
+            GROUP BY currency
+        """)
+        balance_by_currency = {row['currency']: float(row['total_balance']) for row in cursor.fetchall()}
+        
+        # Get accounts by type
+        cursor.execute("""
+            SELECT account_type, COUNT(*) as count 
+            FROM accounts 
+            GROUP BY account_type
+        """)
+        accounts_by_type = {row['account_type']: row['count'] for row in cursor.fetchall()}
+        
+        return {
+            "total_accounts": total_accounts,
+            "balance_by_currency": balance_by_currency,
+            "accounts_by_type": accounts_by_type,
+            "last_updated": datetime.now().isoformat()
+        }
+    except Error as e:
+        print(f"Error getting account summary: {e}")
+        return {"error": str(e)}
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 @mcp.tool()
 def add_account(account_type: str, balance: float, currency: str) -> Dict:
@@ -147,16 +179,36 @@ def add_account(account_type: str, balance: float, currency: str) -> Dict:
     Returns:
         Dictionary containing the created account details
     """
-    account_id = str(uuid4())
-    account = Account(account_id, account_type, balance, currency)
-    accounts_db[account_id] = account
-    return {
-        "account_id": account_id,
-        "account_type": account_type,
-        "balance": balance,
-        "currency": currency,
-        "created_at": account.created_at
-    }
+    connection = get_db_connection()
+    if not connection:
+        return {"error": "Database connection failed"}
+    
+    try:
+        cursor = connection.cursor()
+        account_id = str(uuid4())
+        created_at = datetime.now()
+        
+        cursor.execute("""
+            INSERT INTO accounts (account_id, account_type, balance, currency, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (account_id, account_type, balance, currency, created_at))
+        
+        connection.commit()
+        
+        return {
+            "account_id": account_id,
+            "account_type": account_type,
+            "balance": balance,
+            "currency": currency,
+            "created_at": created_at.isoformat()
+        }
+    except Error as e:
+        print(f"Error adding account: {e}")
+        return {"error": str(e)}
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 @mcp.tool()
 def add_multiple_accounts(accounts: List[Dict]) -> List[Dict]:
@@ -171,45 +223,96 @@ def add_multiple_accounts(accounts: List[Dict]) -> List[Dict]:
     Returns:
         List of created accounts with their details
     """
-    created_accounts = []
+    connection = get_db_connection()
+    if not connection:
+        return [{"error": "Database connection failed"}]
     
-    for account_data in accounts:
-        account_id = str(uuid4())
-        account = Account(
-            account_id,
-            account_data["account_type"],
-            account_data["balance"],
-            account_data["currency"]
-        )
-        accounts_db[account_id] = account
-        created_accounts.append({
-            "account_id": account_id,
-            "account_type": account.account_type,
-            "balance": account.balance,
-            "currency": account.currency,
-            "created_at": account.created_at
-        })
-    
-    return created_accounts
+    try:
+        cursor = connection.cursor()
+        created_accounts = []
+        
+        for account_data in accounts:
+            account_id = str(uuid4())
+            created_at = datetime.now()
+            
+            cursor.execute("""
+                INSERT INTO accounts (account_id, account_type, balance, currency, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                account_id,
+                account_data["account_type"],
+                account_data["balance"],
+                account_data["currency"],
+                created_at
+            ))
+            
+            created_accounts.append({
+                "account_id": account_id,
+                "account_type": account_data["account_type"],
+                "balance": account_data["balance"],
+                "currency": account_data["currency"],
+                "created_at": created_at.isoformat()
+            })
+        
+        connection.commit()
+        return created_accounts
+    except Error as e:
+        print(f"Error adding multiple accounts: {e}")
+        return [{"error": str(e)}]
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 @mcp.resource("accounts://{customer_id}")
 def get_accounts(customer_id: str) -> List[Dict]:
     """Get all accounts for a customer"""
-    return list(accounts_db.values())
+    connection = get_db_connection()
+    if not connection:
+        return []
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM accounts")
+        accounts = cursor.fetchall()
+        
+        # Convert datetime objects to ISO format strings
+        for account in accounts:
+            account['created_at'] = account['created_at'].isoformat()
+        
+        return accounts
+    except Error as e:
+        print(f"Error getting accounts: {e}")
+        return []
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 @mcp.resource("account://{account_id}")
 def get_account_details(account_id: str) -> Dict:
     """Get detailed information about a specific account"""
-    account = accounts_db.get(account_id)
-    if not account:
-        return {"error": "Account not found"}
-    return {
-        "account_id": account.account_id,
-        "account_type": account.account_type,
-        "balance": account.balance,
-        "currency": account.currency,
-        "created_at": account.created_at
-    }
+    connection = get_db_connection()
+    if not connection:
+        return {"error": "Database connection failed"}
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM accounts WHERE account_id = %s", (account_id,))
+        account = cursor.fetchone()
+        
+        if not account:
+            return {"error": "Account not found"}
+        
+        account['created_at'] = account['created_at'].isoformat()
+        return account
+    except Error as e:
+        print(f"Error getting account details: {e}")
+        return {"error": str(e)}
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 # Beneficiary Management
 @mcp.tool()
@@ -485,12 +588,32 @@ def get_transaction_history(account_id: str,
 @mcp.resource("balance://{account_id}")
 def get_account_balance(account_id: str) -> Dict:
     """Get current balance for an account"""
-    account = accounts_db.get(account_id)
-    if not account:
-        return {"error": "Account not found"}
-    return {
-        "account_id": account.account_id,
-        "balance": account.balance,
-        "currency": account.currency,
-        "last_updated": datetime.now().isoformat()
-    }
+    connection = get_db_connection()
+    if not connection:
+        return {"error": "Database connection failed"}
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT account_id, balance, currency 
+            FROM accounts 
+            WHERE account_id = %s
+        """, (account_id,))
+        account = cursor.fetchone()
+        
+        if not account:
+            return {"error": "Account not found"}
+        
+        return {
+            "account_id": account['account_id'],
+            "balance": float(account['balance']),
+            "currency": account['currency'],
+            "last_updated": datetime.now().isoformat()
+        }
+    except Error as e:
+        print(f"Error getting account balance: {e}")
+        return {"error": str(e)}
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
