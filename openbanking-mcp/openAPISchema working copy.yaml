@@ -4,11 +4,136 @@ info:
   version: "1.0.0"
   description: |
     API for banking operations that can be used by a Bedrock Agent.
-    This API provides tools for managing bank accounts and processing payments.
+    This API provides tools for managing bank accounts, beneficiaries, and processing payments.
 
 servers:
   - url: https://cteybj63ywtlxehc7xghotyqqa0eckka.lambda-url.us-west-2.on.aws
     description: Lambda Function URL endpoint
+
+components:
+  schemas:
+    AccountType:
+      type: string
+      enum: [checking, savings, credit]
+      description: Type of bank account
+
+    Account:
+      type: object
+      required:
+        - account_id
+        - type
+        - balance
+        - currency
+        - created_at
+      properties:
+        account_id:
+          type: string
+          format: uuid
+          description: Unique account identifier
+        type:
+          $ref: '#/components/schemas/AccountType'
+        balance:
+          type: number
+          format: float
+          description: Current account balance
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          description: Account currency code (3 letters)
+        created_at:
+          type: string
+          format: date-time
+          description: Account creation timestamp
+
+    PaymentStatus:
+      type: string
+      enum: [pending, completed, failed, cancelled, scheduled]
+      description: Status of a payment
+
+    PaymentType:
+      type: string
+      enum: [transfer, bill_payment, wire_transfer, ach, card_payment]
+      description: Type of payment
+
+    Payment:
+      type: object
+      required:
+        - payment_id
+        - amount
+        - currency
+        - beneficiary_id
+        - status
+        - type
+        - created_at
+      properties:
+        payment_id:
+          type: string
+          format: uuid
+          description: Unique payment identifier
+        amount:
+          type: number
+          format: float
+          minimum: 0
+          description: Payment amount
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          description: Payment currency code
+        beneficiary_id:
+          type: string
+          format: uuid
+          description: ID of the beneficiary receiving the payment
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        type:
+          $ref: '#/components/schemas/PaymentType'
+        scheduled_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: Scheduled date for the payment
+        created_at:
+          type: string
+          format: date-time
+          description: Payment creation timestamp
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when the payment was completed
+
+    Beneficiary:
+      type: object
+      required:
+        - beneficiary_id
+        - name
+        - account_number
+        - bank_code
+        - created_at
+      properties:
+        beneficiary_id:
+          type: string
+          format: uuid
+          description: Unique beneficiary identifier
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Beneficiary name
+        account_number:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Beneficiary's account number
+        bank_code:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: Bank code/identifier
+        created_at:
+          type: string
+          format: date-time
+          description: Beneficiary creation timestamp
 
 paths:
   /list_accounts:
@@ -51,7 +176,7 @@ paths:
                               body:
                                 type: string
                                 description: JSON string containing the response data
-                                example: '{"accounts":[{"id":"acc_001","name":"Primary Checking","type":"checking","balance":2500.5,"currency":"USD"},{"id":"acc_002","name":"Savings Account","type":"savings","balance":10000.0,"currency":"USD"}],"message":"Successfully retrieved accounts"}'
+                                example: '{"accounts":[{"account_id":"acc_001","type":"checking","balance":2500.5,"currency":"USD","created_at":"2024-03-20T10:00:00Z"}]}'
         '500':
           description: Error response
           content:
@@ -92,7 +217,7 @@ paths:
     post:
       summary: Create a new bank account
       description: Creates a new bank account with specified details
-      operationId: create_account
+      operationId: createAccount
       requestBody:
         required: true
         content:
@@ -100,19 +225,16 @@ paths:
             schema:
               type: object
               required:
-                - name
                 - type
+                - currency
               properties:
-                name:
+                account_id:
                   type: string
-                  minLength: 1
-                  maxLength: 100
-                  description: Account name
+                  format: uuid
+                  description: Unique account identifier (optional, will be generated if not provided)
                 type:
-                  type: string
-                  enum: [checking, savings, credit]
-                  description: Type of account to create
-                initial_balance:
+                  $ref: '#/components/schemas/AccountType'
+                balance:
                   type: number
                   format: float
                   minimum: 0
@@ -121,46 +243,77 @@ paths:
                 currency:
                   type: string
                   pattern: "^[A-Z]{3}$"
-                  default: "USD"
                   description: Account currency code
+                created_at:
+                  type: string
+                  format: date-time
+                  description: Account creation timestamp (optional, will use current time if not provided)
       responses:
         '200':
           description: Account created successfully
           content:
             application/json:
               schema:
+                $ref: '#/components/schemas/Account'
+
+  /list_payments:
+    post:
+      summary: List all payments
+      description: Retrieve a list of all payments, optionally filtered by beneficiary
+      operationId: listPayments
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                beneficiary_id:
+                  type: string
+                  format: uuid
+                  description: Optional beneficiary ID to filter payments
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
                 type: object
                 properties:
-                  toolUseId:
+                  messageVersion:
                     type: string
-                    description: Unique identifier for the tool invocation
-                  status:
-                    type: string
-                    enum: [success, error]
-                  content:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        type:
-                          type: string
-                          enum: [text]
-                          description: Type of content
-                        text:
-                          type: object
-                          description: Actual response data as a JSON object
-              example:
-                toolUseId: "tool_123"
-                status: "success"
-                content:
-                  - type: "text"
-                    text: '{"status":"success","data":{"id":"acc_003","name":"My Checking Account","type":"checking","balance":1000.00,"currency":"USD"}}'
+                    example: "1.0"
+                  response:
+                    type: object
+                    properties:
+                      actionGroup:
+                        type: string
+                        example: "toollist"
+                      apiPath:
+                        type: string
+                        example: "/list_payments"
+                      httpMethod:
+                        type: string
+                        example: "POST"
+                      httpStatusCode:
+                        type: integer
+                        example: 200
+                      responseBody:
+                        type: object
+                        properties:
+                          application/json:
+                            type: object
+                            properties:
+                              body:
+                                type: string
+                                description: JSON string containing the response data
+                                example: '{"payments":[{"payment_id":"pay_001","amount":1000.00,"currency":"USD","beneficiary_id":"ben_001","status":"completed","type":"transfer","created_at":"2024-03-20T10:00:00Z","completed_at":"2024-03-20T10:01:00Z"}]}'
 
   /initiate_payment:
     post:
-      summary: Initiate a payment between accounts
-      description: Initiates a payment between two accounts with validation
-      operationId: initiate_payment
+      summary: Initiate a payment
+      description: Initiates a new payment to a beneficiary
+      operationId: initiatePayment
       requestBody:
         required: true
         content:
@@ -168,86 +321,142 @@ paths:
             schema:
               type: object
               required:
-                - from_account
-                - to_account
                 - amount
+                - currency
+                - beneficiary_id
+                - type
               properties:
-                from_account:
+                payment_id:
                   type: string
-                  description: Source account ID
-                to_account:
-                  type: string
-                  description: Destination account ID
+                  format: uuid
+                  description: Unique payment identifier (optional, will be generated if not provided)
                 amount:
                   type: number
                   format: float
-                  exclusiveMinimum: 0
+                  minimum: 0
                   description: Payment amount
-                description:
+                currency:
                   type: string
-                  maxLength: 200
-                  description: Payment description
-                  nullable: true
+                  pattern: "^[A-Z]{3}$"
+                  description: Payment currency code
+                source_account_id:
+                  type: string
+                  format: uuid
+                  description: ID of the payer doing the payment
+                beneficiary_id:
+                  type: string
+                  format: uuid
+                  description: ID of the beneficiary receiving the payment
+                status:
+                  $ref: '#/components/schemas/PaymentStatus'
+                  default: pending
+                type:
+                  $ref: '#/components/schemas/PaymentType'
+                scheduled_date:
+                  type: string
+                  format: date-time
+                  description: Scheduled date for the payment (optional)
+                created_at:
+                  type: string
+                  format: date-time
+                  description: Payment creation timestamp (optional, will use current time if not provided)
+                completed_at:
+                  type: string
+                  format: date-time
+                  description: Timestamp when the payment was completed (optional)
       responses:
         '200':
           description: Payment initiated successfully
           content:
             application/json:
               schema:
+                $ref: '#/components/schemas/Payment'
+
+  /list_beneficiaries:
+    post:
+      summary: List all beneficiaries
+      description: Retrieve a list of all beneficiaries
+      operationId: listBeneficiaries
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
                 type: object
                 properties:
-                  toolUseId:
+                  messageVersion:
                     type: string
-                    description: Unique identifier for the tool invocation
-                  status:
-                    type: string
-                    enum: [success, error]
-                  content:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        type:
-                          type: string
-                          enum: [text]
-                          description: Type of content
-                        text:
-                          type: object
-                          description: Actual response data as a JSON object
-              example:
-                toolUseId: "tool_123"
-                status: "success"
-                content:
-                  - type: "text"
-                    text: '{"status":"success","data":{"payment_id":"pay_001","status":"completed","from_account":"acc_001","to_account":"acc_002","amount":100.00,"description":"Monthly rent payment"}}'
+                    example: "1.0"
+                  response:
+                    type: object
+                    properties:
+                      actionGroup:
+                        type: string
+                        example: "toollist"
+                      apiPath:
+                        type: string
+                        example: "/list_beneficiaries"
+                      httpMethod:
+                        type: string
+                        example: "POST"
+                      httpStatusCode:
+                        type: integer
+                        example: 200
+                      responseBody:
+                        type: object
+                        properties:
+                          application/json:
+                            type: object
+                            properties:
+                              body:
+                                type: string
+                                description: JSON string containing the response data
+                                example: '{"beneficiaries":[{"beneficiary_id":"ben_001","name":"John Doe","account_number":"1234567890","bank_code":"BOA123","created_at":"2024-03-20T10:00:00Z"}]}'
 
-components:
-  schemas:
-    Error:
-      type: object
-      properties:
-        toolUseId:
-          type: string
-          description: Unique identifier for the tool invocation
-        status:
-          type: string
-          enum: [error]
-          description: Error status
+  /create_beneficiary:
+    post:
+      summary: Create a new beneficiary
+      description: Creates a new beneficiary with specified details
+      operationId: createBeneficiary
+      requestBody:
+        required: true
         content:
-          type: array
-          items:
-            type: object
-            properties:
-              type:
-                type: string
-                enum: [text]
-                description: Type of content
-              text:
-                type: object
-                description: Error message
-      example:
-        toolUseId: "tool_123"
-        status: "error"
-        content:
-          - type: "text"
-            text: "Invalid account ID provided" 
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - account_number
+                - bank_code
+              properties:
+                beneficiary_id:
+                  type: string
+                  format: uuid
+                  description: Unique beneficiary identifier (optional, will be generated if not provided)
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: Beneficiary name
+                account_number:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                  description: Beneficiary's account number
+                bank_code:
+                  type: string
+                  minLength: 1
+                  maxLength: 20
+                  description: Bank code/identifier
+                created_at:
+                  type: string
+                  format: date-time
+                  description: Beneficiary creation timestamp (optional, will use current time if not provided)
+      responses:
+        '200':
+          description: Beneficiary created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Beneficiary' 
